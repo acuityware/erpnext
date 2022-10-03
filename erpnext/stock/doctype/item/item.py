@@ -937,15 +937,24 @@ class Item(Document):
 				"Purchase Order Item",
 				"Material Request Item",
 				"Product Bundle",
+				"BOM",
 			]
 
 		for doctype in linked_doctypes:
 			filters = {"item_code": self.name, "docstatus": 1}
 
-			if doctype == "Product Bundle":
-				filters = {"new_item_code": self.name}
+			if doctype in ("Product Bundle", "BOM"):
+				if doctype == "Product Bundle":
+					filters = {"new_item_code": self.name}
+					fieldname = "new_item_code as docname"
+				else:
+					filters = {"item": self.name, "docstatus": 1}
+					fieldname = "name as docname"
 
-			if doctype in (
+				if linked_doc := frappe.db.get_value(doctype, filters, fieldname, as_dict=True):
+					return linked_doc.update({"doctype": doctype})
+
+			elif doctype in (
 				"Purchase Invoice Item",
 				"Sales Invoice Item",
 			):
@@ -1155,7 +1164,7 @@ def check_stock_uom_with_bin(item, stock_uom):
 
 	bin_list = frappe.db.sql(
 		"""
-			select * from tabBin where item_code = %s
+			select * from `tabBin` where item_code = %s
 				and (reserved_qty > 0 or ordered_qty > 0 or indented_qty > 0 or planned_qty > 0)
 				and stock_uom != %s
 			""",
@@ -1171,7 +1180,7 @@ def check_stock_uom_with_bin(item, stock_uom):
 		)
 
 	# No SLE or documents against item. Bin UOM can be changed safely.
-	frappe.db.sql("""update tabBin set stock_uom=%s where item_code=%s""", (stock_uom, item))
+	frappe.db.sql("""update `tabBin` set stock_uom=%s where item_code=%s""", (stock_uom, item))
 
 
 def get_item_defaults(item_code, company):

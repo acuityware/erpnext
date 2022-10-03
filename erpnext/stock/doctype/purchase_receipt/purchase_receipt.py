@@ -123,6 +123,7 @@ class PurchaseReceipt(BuyingController):
 		if getdate(self.posting_date) > getdate(nowdate()):
 			throw(_("Posting Date cannot be future date"))
 
+		self.get_current_stock()
 		self.reset_default_field_value("set_warehouse", "items", "warehouse")
 		self.reset_default_field_value("rejected_warehouse", "items", "rejected_warehouse")
 		self.reset_default_field_value("set_from_warehouse", "items", "from_warehouse")
@@ -234,7 +235,7 @@ class PurchaseReceipt(BuyingController):
 
 		self.make_gl_entries()
 		self.repost_future_sle_and_gle()
-		self.set_consumed_qty_in_po()
+		self.set_consumed_qty_in_subcontract_order()
 
 	def check_next_docstatus(self):
 		submit_rv = frappe.db.sql(
@@ -270,18 +271,7 @@ class PurchaseReceipt(BuyingController):
 		self.repost_future_sle_and_gle()
 		self.ignore_linked_doctypes = ("GL Entry", "Stock Ledger Entry", "Repost Item Valuation")
 		self.delete_auto_created_batches()
-		self.set_consumed_qty_in_po()
-
-	@frappe.whitelist()
-	def get_current_stock(self):
-		for d in self.get("supplied_items"):
-			if self.supplier_warehouse:
-				bin = frappe.db.sql(
-					"select actual_qty from `tabBin` where item_code = %s and warehouse = %s",
-					(d.rm_item_code, self.supplier_warehouse),
-					as_dict=1,
-				)
-				d.current_stock = bin and flt(bin[0]["actual_qty"]) or 0
+		self.set_consumed_qty_in_subcontract_order()
 
 	def get_gl_entries(self, warehouse_account=None):
 		from erpnext.accounts.general_ledger import process_gl_map
@@ -372,6 +362,12 @@ class PurchaseReceipt(BuyingController):
 						if credit_currency == self.company_currency
 						else flt(d.net_amount, d.precision("net_amount"))
 					)
+
+					outgoing_amount = d.base_net_amount
+					if self.is_internal_supplier and d.valuation_rate:
+						outgoing_amount = d.valuation_rate * d.stock_qty
+						credit_amount = outgoing_amount
+
 					if credit_amount:
 						account = warehouse_account[d.from_warehouse]["account"] if d.from_warehouse else stock_rbnb
 
@@ -379,7 +375,7 @@ class PurchaseReceipt(BuyingController):
 							gl_entries=gl_entries,
 							account=account,
 							cost_center=d.cost_center,
-							debit=-1 * flt(d.base_net_amount, d.precision("base_net_amount")),
+							debit=-1 * flt(outgoing_amount, d.precision("base_net_amount")),
 							credit=0.0,
 							remarks=remarks,
 							against_account=warehouse_account_name,
@@ -466,7 +462,7 @@ class PurchaseReceipt(BuyingController):
 
 					# divisional loss adjustment
 					valuation_amount_as_per_doc = (
-						flt(d.base_net_amount, d.precision("base_net_amount"))
+						flt(outgoing_amount, d.precision("base_net_amount"))
 						+ flt(d.landed_cost_voucher_amount)
 						+ flt(d.rm_supp_cost)
 						+ flt(d.item_tax_amount)
@@ -511,6 +507,7 @@ class PurchaseReceipt(BuyingController):
 				and not d.is_fixed_asset
 				and flt(d.qty)
 				and provisional_accounting_for_non_stock_items
+				and d.get("provisional_expense_account")
 			):
 				self.add_provisional_gl_entry(
 					d, gl_entries, self.posting_date, d.get("provisional_expense_account")
@@ -639,47 +636,6 @@ class PurchaseReceipt(BuyingController):
 					)
 
 					i += 1
-
-	def add_gl_entry(
-		self,
-		gl_entries,
-		account,
-		cost_center,
-		debit,
-		credit,
-		remarks,
-		against_account,
-		debit_in_account_currency=None,
-		credit_in_account_currency=None,
-		account_currency=None,
-		project=None,
-		voucher_detail_no=None,
-		item=None,
-		posting_date=None,
-	):
-
-		gl_entry = {
-			"account": account,
-			"cost_center": cost_center,
-			"debit": debit,
-			"credit": credit,
-			"against": against_account,
-			"remarks": remarks,
-		}
-
-		if voucher_detail_no:
-			gl_entry.update({"voucher_detail_no": voucher_detail_no})
-
-		if debit_in_account_currency:
-			gl_entry.update({"debit_in_account_currency": debit_in_account_currency})
-
-		if credit_in_account_currency:
-			gl_entry.update({"credit_in_account_currency": credit_in_account_currency})
-
-		if posting_date:
-			gl_entry.update({"posting_date": posting_date})
-
-		gl_entries.append(self.get_gl_dict(gl_entry, item=item))
 
 	def get_asset_gl_entry(self, gl_entries):
 		for item in self.get("items"):

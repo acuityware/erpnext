@@ -107,7 +107,7 @@ def get_items(start, page_length, price_list, item_group, pos_profile, search_te
 		ORDER BY
 			item.name asc
 		LIMIT
-			{start}, {page_length}""".format(
+			{page_length} offset {start}""".format(
 			start=start,
 			page_length=page_length,
 			lft=lft,
@@ -204,7 +204,7 @@ def item_group_query(doctype, txt, searchfield, start, page_len, filters):
 
 	return frappe.db.sql(
 		""" select distinct name from `tabItem Group`
-			where {condition} and (name like %(txt)s) limit {start}, {page_len}""".format(
+			where {condition} and (name like %(txt)s) limit {page_len} offset {start}""".format(
 			condition=cond, start=start, page_len=page_len
 		),
 		{"txt": "%%%s%%" % txt},
@@ -253,16 +253,20 @@ def get_past_order_list(search_term, status, limit=20):
 			"POS Invoice",
 			filters={"customer": ["like", "%{}%".format(search_term)], "status": status},
 			fields=fields,
+			page_length=limit,
 		)
 		invoices_by_name = frappe.db.get_all(
 			"POS Invoice",
 			filters={"name": ["like", "%{}%".format(search_term)], "status": status},
 			fields=fields,
+			page_length=limit,
 		)
 
 		invoice_list = invoices_by_customer + invoices_by_name
 	elif status:
-		invoice_list = frappe.db.get_all("POS Invoice", filters={"status": status}, fields=fields)
+		invoice_list = frappe.db.get_all(
+			"POS Invoice", filters={"status": status}, fields=fields, page_length=limit
+		)
 
 	return invoice_list
 

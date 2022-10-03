@@ -87,6 +87,7 @@ class RepostItemValuation(Document):
 		self.current_index = 0
 		self.distinct_item_and_warehouse = None
 		self.items_to_be_repost = None
+		self.gl_reposting_index = 0
 		self.db_update()
 
 	def deduplicate_similar_repost(self):
@@ -137,6 +138,11 @@ def repost(doc):
 		doc.set_status("Completed")
 
 	except Exception as e:
+		if frappe.flags.in_test:
+			# Don't silently fail in tests,
+			# there is no reason for reposts to fail in CI
+			raise
+
 		frappe.db.rollback()
 		traceback = frappe.get_traceback()
 		doc.log_error("Unable to repost item valuation")
@@ -192,6 +198,7 @@ def repost_gl_entries(doc):
 		directly_dependent_transactions + list(repost_affected_transaction),
 		doc.posting_date,
 		doc.company,
+		repost_doc=doc,
 	)
 
 
@@ -300,3 +307,9 @@ def in_configured_timeslot(repost_settings=None, current_time=None):
 		return end_time >= now_time >= start_time
 	else:
 		return now_time >= start_time or now_time <= end_time
+
+
+@frappe.whitelist()
+def execute_repost_item_valuation():
+	"""Execute repost item valuation via scheduler."""
+	frappe.get_doc("Scheduled Job Type", "repost_item_valuation.repost_entries").enqueue(force=True)

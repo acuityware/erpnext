@@ -25,6 +25,7 @@ from erpnext.manufacturing.doctype.production_plan.production_plan import (
 from erpnext.selling.doctype.customer.customer import check_credit_limit
 from erpnext.setup.doctype.item_group.item_group import get_item_group_defaults
 from erpnext.stock.doctype.item.item import get_item_defaults
+from erpnext.stock.get_item_details import get_default_bom
 from erpnext.stock.stock_balance import get_reserved_qty, update_bin_qty
 
 form_grid_templates = {"items": "templates/form_grid/item_grid.html"}
@@ -423,8 +424,9 @@ class SalesOrder(SellingController):
 
 		for table in [self.items, self.packed_items]:
 			for i in table:
-				bom = get_default_bom_item(i.item_code)
+				bom = get_default_bom(i.item_code)
 				stock_qty = i.qty if i.doctype == "Packed Item" else i.stock_qty
+
 				if not for_raw_material_request:
 					total_work_order_qty = flt(
 						frappe.db.sql(
@@ -438,32 +440,19 @@ class SalesOrder(SellingController):
 					pending_qty = stock_qty
 
 				if pending_qty and i.item_code not in product_bundle_parents:
-					if bom:
-						items.append(
-							dict(
-								name=i.name,
-								item_code=i.item_code,
-								description=i.description,
-								bom=bom,
-								warehouse=i.warehouse,
-								pending_qty=pending_qty,
-								required_qty=pending_qty if for_raw_material_request else 0,
-								sales_order_item=i.name,
-							)
+					items.append(
+						dict(
+							name=i.name,
+							item_code=i.item_code,
+							description=i.description,
+							bom=bom or "",
+							warehouse=i.warehouse,
+							pending_qty=pending_qty,
+							required_qty=pending_qty if for_raw_material_request else 0,
+							sales_order_item=i.name,
 						)
-					else:
-						items.append(
-							dict(
-								name=i.name,
-								item_code=i.item_code,
-								description=i.description,
-								bom="",
-								warehouse=i.warehouse,
-								pending_qty=pending_qty,
-								required_qty=pending_qty if for_raw_material_request else 0,
-								sales_order_item=i.name,
-							)
-						)
+					)
+
 		return items
 
 	def on_recurring(self, reference_doc, auto_repeat_doc):
@@ -891,6 +880,9 @@ def get_events(start, end, filters=None):
 @frappe.whitelist()
 def make_purchase_order_for_default_supplier(source_name, selected_items=None, target_doc=None):
 	"""Creates Purchase Order for each Supplier. Returns a list of doc objects."""
+
+	from erpnext.setup.utils import get_exchange_rate
+
 	if not selected_items:
 		return
 
@@ -899,10 +891,20 @@ def make_purchase_order_for_default_supplier(source_name, selected_items=None, t
 
 	def set_missing_values(source, target):
 		target.supplier = supplier
+		target.currency = frappe.db.get_value(
+			"Supplier", filters={"name": supplier}, fieldname=["default_currency"]
+		)
+		company_currency = frappe.db.get_value(
+			"Company", filters={"name": target.company}, fieldname=["default_currency"]
+		)
+
+		target.conversion_rate = get_exchange_rate(target.currency, company_currency, args="for_buying")
+
 		target.apply_discount_on = ""
 		target.additional_discount_percentage = 0.0
 		target.discount_amount = 0.0
 		target.inter_company_order_reference = ""
+		target.shipping_rule = ""
 
 		default_price_list = frappe.get_value("Supplier", supplier, "default_price_list")
 		if default_price_list:
@@ -1021,6 +1023,7 @@ def make_purchase_order(source_name, selected_items=None, target_doc=None):
 		target.additional_discount_percentage = 0.0
 		target.discount_amount = 0.0
 		target.inter_company_order_reference = ""
+		target.shipping_rule = ""
 		target.customer = ""
 		target.customer_name = ""
 		target.run_method("set_missing_values")
@@ -1165,13 +1168,6 @@ def make_work_orders(items, sales_order, company, project=None):
 def update_status(status, name):
 	so = frappe.get_doc("Sales Order", name)
 	so.update_status(status)
-
-
-def get_default_bom_item(item_code):
-	bom = frappe.get_all("BOM", dict(item=item_code, is_active=True), order_by="is_default desc")
-	bom = bom[0].name if bom else None
-
-	return bom
 
 
 @frappe.whitelist()

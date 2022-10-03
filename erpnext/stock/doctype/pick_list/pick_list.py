@@ -183,7 +183,7 @@ class PickList(Document):
 				frappe.throw("Row #{0}: Item Code is Mandatory".format(item.idx))
 			item_code = item.item_code
 			reference = item.sales_order_item or item.material_request_item
-			key = (item_code, item.uom, reference)
+			key = (item_code, item.uom, item.warehouse, item.batch_no, reference)
 
 			item.idx = None
 			item.name = None
@@ -699,7 +699,7 @@ def get_pending_work_orders(doctype, txt, searchfield, start, page_length, filte
 			AND `company` = %(company)s
 			AND `name` like %(txt)s
 		ORDER BY
-			if(locate(%(_txt)s, name), locate(%(_txt)s, name), 99999), name
+			(case when locate(%(_txt)s, name) > 0 then locate(%(_txt)s, name) else 99999 end) name
 		LIMIT
 			%(start)s, %(page_length)s""",
 		{
